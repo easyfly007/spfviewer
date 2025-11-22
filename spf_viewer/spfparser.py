@@ -41,7 +41,9 @@ class SPFParser:
 
     def parse(self):
         """Parse the file and populate the nodes and elements dictionaries."""
-
+        import time
+        parse_start = time.time()
+        
         with open(self.file_path, 'r') as f:
             subckt = None
             current_net = None
@@ -137,6 +139,16 @@ class SPFParser:
                     elem = RCElement(elem_id, n1.id, n2.id, float(value), llx, lly, urx, ury, layer, elem_type)
                     current_net.add_element(elem)
                     continue
+        
+        parse_end = time.time()
+        parse_time = parse_end - parse_start
+        
+        # Count statistics
+        total_nodes = sum(len(net.nodes) for net in self.nets.values())
+        total_elements = sum(len(net.elements) for net in self.nets.values())
+        
+        print(f"[Parse Stats] Parsing completed: {len(self.nets)} nets, {total_nodes} nodes, {total_elements} elements")
+        print(f"[Parse Stats] Parsing time: {parse_time:.4f} seconds")
 
     def summary(self):
         """Print a summary of parsed nodes and RC elements."""

@@ -13,6 +13,7 @@ class RCElement:
         self.ury = ury
         self.layer = layer
         self.type = elem_type
+        self.index = None  # Index within the net, assigned when added to net
     def __repr__(self):
         return f"RCElement(id={self.id}, node1={self.node1}, node2={self.node2}, value={self.value}, layer={self.layer}, type={self.type})"
     def __str__(self):

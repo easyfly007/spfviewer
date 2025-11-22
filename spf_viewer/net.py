@@ -5,6 +5,7 @@ class Net:
         self.type = type
         self.nodes = {}
         self.elements = {}
+        self._element_counter = 0  # Counter for assigning indices to elements in this net
     def __repr__(self):
         return f"Net(id={self.id}, name={self.name}, type={self.type}, nodes={self.nodes})"
     def __str__(self):
@@ -13,6 +14,9 @@ class Net:
         self.nodes[node.id] = node
     def add_element(self, element):
         self.elements[element.id] = element
+        # Assign index to element within this net (starting from 0)
+        element.index = self._element_counter
+        self._element_counter += 1
     def get_element(self, element_id):
         return self.elements.get(element_id)
     def get_nodes(self):

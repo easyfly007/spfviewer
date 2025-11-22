@@ -10,6 +10,7 @@ from PySide6.QtGui import QPen, QColor, QIcon, QAction, QFontMetrics, QMouseEven
 from .spfparser import SPFParser
 import sys
 import os
+import time
 
 class PanGraphicsView(QGraphicsView):
     """Custom QGraphicsView with mouse drag to pan functionality."""
@@ -111,7 +112,18 @@ class RCViewer(QMainWindow):
         # no qt please, use numpy and matplotlib instead
         self.view.setBackgroundBrush(QColor(255, 255, 255))
         self.setCentralWidget(self.view)
+        
+        # Time statistics
+        print("=" * 60)
+        print("Starting to load and render SPF file...")
+        print("=" * 60)
+        
+        # Parse SPF file
+        parse_start = time.time()
         self.parser = SPFParser(self.file_path)
+        parse_end = time.time()
+        parse_time = parse_end - parse_start
+        print(f"[Time Stats] Parse SPF file: {parse_time:.4f} seconds")
         
         # Store graphics items by layer for visibility control
         self.layer_items = {}  # {layer_name: [list of graphics items]}
@@ -152,11 +164,25 @@ class RCViewer(QMainWindow):
         # Create toolbar
         self.create_toolbar()
         
-        # Create status bar
+        # Create status bar (with two lines: selection info and SPF file name)
         self.create_status_bar()
         
+        # Render graphics
+        render_start = time.time()
         self.render_nodes()
+        render_nodes_time = time.time() - render_start
+        print(f"[Time Stats] Render nodes: {render_nodes_time:.4f} seconds")
+        
+        render_elements_start = time.time()
         self.render_elements()
+        render_elements_time = time.time() - render_elements_start
+        print(f"[Time Stats] Render elements: {render_elements_time:.4f} seconds")
+        
+        total_render_time = render_nodes_time + render_elements_time
+        total_time = parse_time + total_render_time
+        print(f"[Time Stats] Total render time: {total_render_time:.4f} seconds")
+        print(f"[Time Stats] Total time: {total_time:.4f} seconds")
+        print("=" * 60)
         
         # Connect scene selection changed signal
         self.scene.selectionChanged.connect(self.on_selection_changed)
@@ -293,9 +319,9 @@ class RCViewer(QMainWindow):
                     color_label.setStyleSheet(f"background-color: {selected_color[0].name()}; border: 1px solid black;")
                     color_label.setToolTip(f"Layer color: {selected_color[0].name()}")
                 
-                self.statusBar().showMessage(f"Color updated for layer: {str(selected_layer) if selected_layer else 'None'}")
+                self.update_status_message(f"Color updated for layer: {str(selected_layer) if selected_layer else 'None'}")
             else:
-                self.statusBar().showMessage("No color selected")
+                self.update_status_message("No color selected")
     
     def update_layer_colors(self, layer, color):
         """Update colors for all graphics items with the specified layer."""
@@ -348,15 +374,32 @@ class RCViewer(QMainWindow):
         self.net_dock.setVisible(True)
     
     def create_status_bar(self):
-        """Create a status bar to show selected resistor information and file name."""
+        """Create a status bar with two lines: selection info (line 1) and SPF file name (line 2)."""
         status_bar = self.statusBar()
-        status_bar.showMessage("Ready")
         
-        # Add permanent widget to show file name (second line effect)
+        # Create a widget to hold two lines of information
+        status_widget = QWidget()
+        status_layout = QVBoxLayout()
+        status_layout.setContentsMargins(5, 2, 5, 2)
+        status_layout.setSpacing(2)
+        
+        # First line: selection info (will be updated by showMessage)
+        self.selection_label = QLabel("Ready")
+        self.selection_label.setAlignment(Qt.AlignLeft)
+        status_layout.addWidget(self.selection_label)
+        
+        # Second line: SPF file name
         self.file_name_label = QLabel("")
-        self.file_name_label.setAlignment(Qt.AlignRight)
-        self.file_name_label.setMinimumWidth(200)  # Ensure it has space
-        status_bar.addPermanentWidget(self.file_name_label)
+        self.file_name_label.setAlignment(Qt.AlignLeft)
+        status_layout.addWidget(self.file_name_label)
+        
+        status_widget.setLayout(status_layout)
+        
+        # Add as permanent widget
+        status_bar.addPermanentWidget(status_widget, 1)
+        
+        # Set initial message
+        status_bar.showMessage("Ready")
         
         # Update file name if file_path is provided
         if self.file_path:
@@ -364,21 +407,28 @@ class RCViewer(QMainWindow):
             self.update_file_name_display(file_name)
             print(f"[DEBUG] Status bar: Setting file name to {file_name}")
         else:
+            self.update_file_name_display("")
             print("[DEBUG] Status bar: No file path provided")
         
         # Force status bar to update
         status_bar.update()
     
+    def update_status_message(self, message):
+        """Update the first line of status bar (selection info)."""
+        self.statusBar().showMessage(message)
+        if hasattr(self, 'selection_label'):
+            self.selection_label.setText(message)
+    
     def update_file_name_display(self, file_name):
-        """Update the file name display in status bar."""
+        """Update the file name display in status bar (second line)."""
         if self.file_name_label:
             if file_name:
-                self.file_name_label.setText(f"File: {file_name}")
+                self.file_name_label.setText(f"SPF File: {file_name}")
                 self.file_name_label.setVisible(True)
-                print(f"[DEBUG] Status bar: Updated file name label to 'File: {file_name}'")
+                print(f"[DEBUG] Status bar: Updated file name label to 'SPF File: {file_name}'")
             else:
                 self.file_name_label.setText("")
-                self.file_name_label.setVisible(False)
+                self.file_name_label.setVisible(True)  # Keep visible even when empty
                 print("[DEBUG] Status bar: Cleared file name label")
         else:
             print("[DEBUG] Status bar: file_name_label is None")
@@ -443,9 +493,17 @@ class RCViewer(QMainWindow):
                 self.selected_element_items = []
                 self.selected_node_items = []
                 
+                # Time statistics for file loading
+                print("=" * 60)
+                print(f"Starting to load new SPF file: {os.path.basename(file_path)}")
+                print("=" * 60)
+                
                 # Update file path and parse new file
                 self.file_path = file_path
+                parse_start = time.time()
                 self.parser = SPFParser(file_path)
+                parse_time = time.time() - parse_start
+                print(f"[Time Stats] Parse SPF file: {parse_time:.4f} seconds")
                 
                 # Update window title (first line)
                 self.setWindowTitle("SPF/DSPF Viewer")
@@ -453,35 +511,57 @@ class RCViewer(QMainWindow):
                 # Update file name display in status bar (second line)
                 self.update_file_name_display(os.path.basename(file_path))
                 
+                # Update top status bar
+                self.update_top_status_bar(os.path.basename(file_path))
+                
                 # Recollect layers and nets
+                collect_start = time.time()
                 self.collect_layers()
                 self.collect_nets()
                 
                 # Reinitialize layer colors
                 self.init_layer_colors()
+                collect_time = time.time() - collect_start
+                print(f"[Time Stats] Collect layers and nets: {collect_time:.4f} seconds")
                 
                 # Recreate panels
+                panel_start = time.time()
                 if hasattr(self, 'net_dock'):
                     self.removeDockWidget(self.net_dock)
                 if hasattr(self, 'layer_dock'):
                     self.removeDockWidget(self.layer_dock)
                 self.create_net_panel()
                 self.create_layer_panel()
+                panel_time = time.time() - panel_start
+                print(f"[Time Stats] Create panels: {panel_time:.4f} seconds")
                 
                 # Re-render
+                render_start = time.time()
                 self.render_nodes()
+                render_nodes_time = time.time() - render_start
+                print(f"[Time Stats] Render nodes: {render_nodes_time:.4f} seconds")
+                
+                render_elements_start = time.time()
                 self.render_elements()
+                render_elements_time = time.time() - render_elements_start
+                print(f"[Time Stats] Render elements: {render_elements_time:.4f} seconds")
+                
+                total_render_time = render_nodes_time + render_elements_time
+                total_time = parse_time + collect_time + panel_time + total_render_time
+                print(f"[Time Stats] Total render time: {total_render_time:.4f} seconds")
+                print(f"[Time Stats] Total time: {total_time:.4f} seconds")
+                print("=" * 60)
                 
                 # Fit to view after loading
                 QTimer.singleShot(100, self.fit_to_view)
                 
                 # Update status bar
-                self.statusBar().showMessage(f"Loaded: {os.path.basename(file_path)}")
+                self.update_status_message(f"Loaded: {os.path.basename(file_path)}")
                 
                 print(f"[DEBUG] Opened SPF file: {file_path}")
                 
             except Exception as e:
-                self.statusBar().showMessage(f"Error loading file: {str(e)}")
+                self.update_status_message(f"Error loading file: {str(e)}")
                 print(f"[DEBUG] Error loading file: {e}")
                 import traceback
                 traceback.print_exc()
@@ -753,7 +833,8 @@ class RCViewer(QMainWindow):
         self.item_to_net[item] = net_id
     
     def render_nodes(self):
-        """渲染节点，使用图层对应的颜色""" 
+        """Render nodes using layer colors"""
+        node_count = 0
         for net_id, net in self.parser.nets.items():
             for node in net.get_nodes():
                 ellipse = QGraphicsEllipseItem(
@@ -772,9 +853,11 @@ class RCViewer(QMainWindow):
                 self.add_item_to_net(ellipse, net_id)
                 # Map to node for selection
                 self.item_to_node[ellipse] = node
+                node_count += 1
 
     def render_elements(self): 
-        """渲染 RC 元素""" 
+        """Render RC elements"""
+        element_count = 0
         # Build a node lookup from all nets
         all_nodes = {}
         for net in self.parser.nets.values():
@@ -782,7 +865,8 @@ class RCViewer(QMainWindow):
                 all_nodes[node.id] = node
         
         for net_id, net in self.parser.nets.items():
-            for elem in net.get_elements(): 
+            for elem in net.get_elements():
+                element_count += 1 
                 # Track which elements use which nodes
                 if elem.node1 not in self.node_to_elements:
                     self.node_to_elements[elem.node1] = []
@@ -802,7 +886,7 @@ class RCViewer(QMainWindow):
                 if elem not in self.element_graphics_items:
                     self.element_graphics_items[elem] = []
                 
-                # 电阻有边界框就用矩形显示 
+                # If element has bounding box, display as rectangle
                 if elem.llx is not None and elem.lly is not None and elem.urx is not None and elem.ury is not None: 
                     rect = QGraphicsRectItem(
                         elem.llx, 
@@ -815,7 +899,7 @@ class RCViewer(QMainWindow):
                     # Make selectable
                     rect.setFlag(QGraphicsItem.ItemIsSelectable, True)
                     
-                    # 填充浅色 
+                    # Fill with light color
                     rect.setToolTip(
                         f"{elem.type} {elem.id}\nNet: {net_id}\nValue: {elem.value}\nLayer: {elem.layer}") 
                     self.scene.addItem(rect)
@@ -826,7 +910,7 @@ class RCViewer(QMainWindow):
                     # Track graphics items for this element
                     self.element_graphics_items[elem].append(rect)
                 else: 
-                    # 没有 bbox 就用节点连线 
+                    # If no bbox, use line connecting nodes
                     n1 = all_nodes.get(elem.node1) 
                     n2 = all_nodes.get(elem.node2) 
                     if not n1 or not n2: 
@@ -842,12 +926,18 @@ class RCViewer(QMainWindow):
                     self.item_to_element[line] = elem
                     # Track graphics items for this element
                     self.element_graphics_items[elem].append(line)
+        
+        render_nodes_for_elements_start = time.time()
         self.render_nodes_for_elements()
+        render_nodes_for_elements_time = time.time() - render_nodes_for_elements_start
+        print(f"[Time Stats] Render element nodes: {render_nodes_for_elements_time:.4f} seconds")
+        print(f"[Time Stats] Rendered {element_count} elements")
         # also render the nodes for the elements
     
 
     def render_nodes_for_elements(self):
-        """渲染节点，使用图层对应的颜色"""
+        """Render nodes for elements using layer colors"""
+        element_node_count = 0
         for net_id, net in self.parser.nets.items():
             for elem in net.get_elements():
                 n1 = net.get_node(elem.node1)
@@ -869,6 +959,7 @@ class RCViewer(QMainWindow):
                     self.add_item_to_net(ellipse, net_id)
                     # Map to node for selection
                     self.item_to_node[ellipse] = n1
+                    element_node_count += 1
                 if n2:
                     ellipse = QGraphicsEllipseItem(
                         n2.x - self.NODE_RADIUS, 
@@ -886,6 +977,7 @@ class RCViewer(QMainWindow):
                     self.add_item_to_net(ellipse, net_id)
                     # Map to node for selection
                     self.item_to_node[ellipse] = n2
+                    element_node_count += 1
     def on_selection_changed(self):
         """Handle selection change in the scene."""
         selected_items = self.scene.selectedItems()
@@ -937,7 +1029,7 @@ class RCViewer(QMainWindow):
         status_text += f"Net: {net_name if net_name else net_id if net_id else 'Unknown'}"
         if element.layer:
             status_text += f" | Layer: {element.layer}"
-        self.statusBar().showMessage(status_text)
+        self.update_status_message(status_text)
         
         # Find all graphics items for this element
         for item, elem in self.item_to_element.items():
@@ -1018,7 +1110,7 @@ class RCViewer(QMainWindow):
         self.selected_node_items = []
         
         # Clear status bar
-        self.statusBar().showMessage("Ready")
+        self.update_status_message("Ready")
         
         # Force update
         self.view.update()
