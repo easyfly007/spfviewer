@@ -1,23 +1,23 @@
 .subckt example_netlist VDD GND
 
 *|NET N1
-*|I N1 X=0.0 Y=0.0
-*|P N2 X=10.0 Y=0.0
-R1 N1 N2 100 $ llx=0.0 lly=0.0 urx=10.0 ury=10.0 layer=M1
-C1 N1 GND 0.5
+*|I N1#1 X=0.0 Y=0.0
+*|P N1#2 X=10.0 Y=0.0
+R1 N1#1 N1#2 100 $ llx=0.0 lly=0.0 urx=10.0 ury=10.0 layer=M1
+C1 N1#1 GND 0.5
 
 *|NET N2
-*|I N2 X=10.0 Y=0.0
-*|P N3 X=20.0 Y=0.0
-*|S N4 X=10.0 Y=10.0
-R2 N2 N3 200 $ llx=10.0 lly=0.0 urx=20.0 ury=10.0 layer=M1
-R3 N2 N4 50 $ llx=10.0 lly=0.0 urx=10.0 ury=10.0 layer=M2
-C2 N2 GND 0.8
+*|I N2#1 X=10.0 Y=7.0
+*|P N2 X=23.0 Y=0.0
+*|S N2#3 X=14.0 Y=15.0
+R2 N2#1 N2 200 $ llx=10.0 lly=0.0 urx=20.0 ury=10.0 layer=M1
+R3 N2 N2#3 50 $ llx=15.0 lly=0.0 urx=10.0 ury=10.0 layer=M2
+C2 N2#3 GND 0.8
 
 *|NET N3
-*|I N3 X=20.0 Y=0.0
-*|P N5 X=30.0 Y=0.0
-R4 N3 N5 150 $ llx=20.0 lly=0.0 urx=30.0 ury=10.0 layer=M1
+*|I N3#2 X=20.0 Y=0.0
+*|P N3 X=30.0 Y=0.0
+R4 N3 N3#2 150 $ llx=20.0 lly=0.0 urx=30.0 ury=10.0 layer=M1
 C3 N3 GND 0.3
 
 .ends example_netlist

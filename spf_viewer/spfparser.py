@@ -35,13 +35,9 @@ class SPFParser:
     .ends example_netlist
     """
     def __init__(self, file_path):
-        print("SPFParser initialized")
-        print("file_path: ", file_path) # debug print
-        print("SPFParser initialized 2")
         self.file_path = file_path
         self.nets = {}
         self.parse()
-        print("SPFParser initialized 3")
 
     def parse(self):
         """Parse the file and populate the nodes and elements dictionaries."""
@@ -50,36 +46,26 @@ class SPFParser:
             subckt = None
             current_net = None
             for line in f :
-                print("line: ", line) # debug print
                 line = line.strip()    # Remove whitespace and comments
                 if not line or line.startswith('#'):    # Skip empty lines and comments
-                    print("line is empty or starts with #") # debug print
                     continue
-                print("line is not empty or starts with #") # debug print
-
                 if line.lower().startswith('.subckt'):
-                    print("line starts with .subckt") # debug print
                     tokens = line.split()
                     subckt = tokens[1]
-                    print("subckt: ", subckt) # debug print
                     continue
                 if line.startswith('.ends'):
-                    print("line starts with .ends") # debug print
                     subckt = None
                     continue
 
                 if line.startswith('*|NET'):
-                    print("line starts with *|NET") # debug print
                     tokens = line.split()
                     net_id = tokens[1]
-                    print("net_id: ", net_id) # debug print
                     current_net = Net(net_id, net_id)
                     self.nets[net_id] = current_net
                     continue
                 
                 # node line
                 if line.startswith('*|I') or line.startswith('*|P') or line.startswith('*|S'):
-                    print("line starts with *|I") # debug print
                     tokens = line.split()
                     if tokens[0] == '*|I':
                         nodetype = 'I'
@@ -89,7 +75,6 @@ class SPFParser:
                         nodetype = 'S'
                     else:
                         assert False, "Invalid node type"
-                    print("nodetype: ", nodetype) # debug print
                     nodename = tokens[1]
                     layer = None    # default layer is None if not specified
                     x = None
@@ -104,20 +89,12 @@ class SPFParser:
                             layer = tok.split('=')[1]
                         else:
                             assert False, "Invalid token"
-                    print("nodename: ", nodename) # debug print
-                    print("x: ", x) # debug print
-                    print("y: ", y) # debug print
-                    print("layer: ", layer) # debug print
-                    print("current_net: ", current_net) # debug print
                     node = Node(nodename, x, y, nodetype, layer)
                     current_net.add_node(node)
-                    print("node: ", node) # debug print
-                    print("current_net: ", current_net) # debug print
                     continue
 
                 # Resistor line
                 if line.startswith('R') or line.startswith('C') or line.startswith('L'):
-                    print("line starts with R, C, or L") # debug print  
                     tokens = line.split()
                     elem_name = tokens[0]
                     if elem_name.startswith('R'):
@@ -155,23 +132,10 @@ class SPFParser:
                             layer = token.split('=')[1]
                         else:
                             assert False, "Invalid token" + str(token)
-                    print("llx: ", llx) # debug print
-                    print("lly: ", lly) # debug print
-                    print("urx: ", urx) # debug print
-                    print("ury: ", ury) # debug print
-                    print("layer: ", layer) # debug print
-                    print("n1_name: ", n1_name) # debug print
-                    print("n2_name: ", n2_name) # debug print
-                    print("value: ", value) # debug print
-                    print("elem_id: ", elem_id) # debug print
-                    print("elem_type: ", elem_type) # debug print
-                    print("tokens: ", tokens) # debug print
                     n1 = current_net.get_node(n1_name)
                     n2 = current_net.get_node(n2_name)
                     elem = RCElement(elem_id, n1.id, n2.id, float(value), llx, lly, urx, ury, layer, elem_type)
                     current_net.add_element(elem)
-                    print("elem: ", elem) # debug print
-                    print("current_net: ", current_net) # debug print
                     continue
 
     def summary(self):
