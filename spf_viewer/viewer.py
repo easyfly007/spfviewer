@@ -4,8 +4,9 @@ from PySide6.QtWidgets import (QMainWindow, QGraphicsView, QGraphicsScene,
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPen, QColor
 from PySide6.QtWidgets import QApplication
-from spfparser import SPFParser
-import sys 
+from .spfparser import SPFParser
+import sys
+import os
 
 class RCViewer(QMainWindow):
     NODE_RADIUS = 2.0
