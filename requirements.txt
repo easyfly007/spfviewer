@@ -1,0 +1,2 @@
+PySide6>=6.5   # for the GUI
+numpy>=1.25    # for the math operations
