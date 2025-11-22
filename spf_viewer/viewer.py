@@ -1,9 +1,10 @@
 from PySide6.QtWidgets import (QMainWindow, QGraphicsView, QGraphicsScene, 
                                 QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsLineItem,
                                 QGraphicsItem,
-                                QDockWidget, QCheckBox, QVBoxLayout, QWidget)
+                                QDockWidget, QCheckBox, QVBoxLayout, QWidget,
+                                QToolBar, QAction)
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPen, QColor
+from PySide6.QtGui import QPen, QColor, QIcon
 from PySide6.QtWidgets import QApplication
 from .spfparser import SPFParser
 import sys
@@ -42,6 +43,7 @@ class RCViewer(QMainWindow):
         # Store original styles for highlighting
         self.item_original_pen = {}  # {graphics_item: QPen}
         self.item_original_brush = {}  # {graphics_item: QBrush}
+        self.item_original_zvalue = {}  # {graphics_item: float}
         # Currently selected element
         self.selected_element = None
         self.selected_element_items = []  # Graphics items for selected element
@@ -55,6 +57,9 @@ class RCViewer(QMainWindow):
         # Create net panel first so it appears above layer panel
         self.create_net_panel()
         self.create_layer_panel()
+        
+        # Create toolbar
+        self.create_toolbar()
         
         self.render_nodes()
         self.render_elements()
@@ -140,6 +145,66 @@ class RCViewer(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, self.net_dock)
         # Make sure the dock widget is visible
         self.net_dock.setVisible(True)
+    
+    def create_toolbar(self):
+        """Create a toolbar with common tools."""
+        toolbar = QToolBar("Main Toolbar", self)
+        toolbar.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
+        self.addToolBar(Qt.TopToolBarArea, toolbar)
+        
+        # Zoom in action
+        zoom_in_action = QAction("Zoom In", self)
+        zoom_in_action.setShortcut("Ctrl++")
+        zoom_in_action.triggered.connect(self.zoom_in)
+        toolbar.addAction(zoom_in_action)
+        
+        # Zoom out action
+        zoom_out_action = QAction("Zoom Out", self)
+        zoom_out_action.setShortcut("Ctrl+-")
+        zoom_out_action.triggered.connect(self.zoom_out)
+        toolbar.addAction(zoom_out_action)
+        
+        # Fit to view action
+        fit_action = QAction("Fit to View", self)
+        fit_action.setShortcut("Ctrl+F")
+        fit_action.triggered.connect(self.fit_to_view)
+        toolbar.addAction(fit_action)
+        
+        # Reset zoom action
+        reset_zoom_action = QAction("Reset Zoom", self)
+        reset_zoom_action.setShortcut("Ctrl+0")
+        reset_zoom_action.triggered.connect(self.reset_zoom)
+        toolbar.addAction(reset_zoom_action)
+        
+        toolbar.addSeparator()
+        
+        # Clear selection action
+        clear_selection_action = QAction("Clear Selection", self)
+        clear_selection_action.setShortcut("Esc")
+        clear_selection_action.triggered.connect(self.clear_selection)
+        toolbar.addAction(clear_selection_action)
+    
+    def zoom_in(self):
+        """Zoom in the view."""
+        self.view.scale(1.2, 1.2)
+    
+    def zoom_out(self):
+        """Zoom out the view."""
+        self.view.scale(1.0 / 1.2, 1.0 / 1.2)
+    
+    def fit_to_view(self):
+        """Fit all items to the view."""
+        if self.scene.items():
+            self.view.fitInView(self.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
+    
+    def reset_zoom(self):
+        """Reset zoom to 1:1."""
+        self.view.resetTransform()
+    
+    def clear_selection(self):
+        """Clear current selection and highlights."""
+        self.scene.clearSelection()
+        self.clear_highlight()
     
     def create_layer_panel(self):
         """Create a dock widget with layer selection checkboxes."""
@@ -477,11 +542,13 @@ class RCViewer(QMainWindow):
         for item, elem in self.item_to_element.items():
             if elem == element:
                 self.selected_element_items.append(item)
-                # Store original style
+                # Store original style and Z value
                 if item not in self.item_original_pen:
                     self.item_original_pen[item] = item.pen() if hasattr(item, 'pen') else None
                 if item not in self.item_original_brush:
                     self.item_original_brush[item] = item.brush() if hasattr(item, 'brush') else None
+                if item not in self.item_original_zvalue:
+                    self.item_original_zvalue[item] = item.zValue()
                 # Highlight the element
                 highlight_pen = QPen(QColor("yellow"), 3)
                 highlight_brush = QColor("yellow").lighter(150)
@@ -489,6 +556,8 @@ class RCViewer(QMainWindow):
                     item.setPen(highlight_pen)
                 if hasattr(item, 'setBrush'):
                     item.setBrush(highlight_brush)
+                # Bring to front by setting high Z value
+                item.setZValue(1000)
         
         target_node_ids = {node1_id, node2_id}
         highlighted_node_ids = set()  # Track which nodes have been highlighted
@@ -498,11 +567,13 @@ class RCViewer(QMainWindow):
             if node.id in target_node_ids and node.id not in highlighted_node_ids:
                 self.selected_node_items.append(item)
                 highlighted_node_ids.add(node.id)  # Mark this node as highlighted
-                # Store original style
+                # Store original style and Z value
                 if item not in self.item_original_pen:
                     self.item_original_pen[item] = item.pen() if hasattr(item, 'pen') else None
                 if item not in self.item_original_brush:
                     self.item_original_brush[item] = item.brush() if hasattr(item, 'brush') else None
+                if item not in self.item_original_zvalue:
+                    self.item_original_zvalue[item] = item.zValue()
                 # Highlight the node
                 highlight_pen = QPen(QColor("orange"), 3)
                 highlight_brush = QColor("orange")
@@ -510,6 +581,8 @@ class RCViewer(QMainWindow):
                     item.setPen(highlight_pen)
                 if hasattr(item, 'setBrush'):
                     item.setBrush(highlight_brush)
+                # Bring to front by setting high Z value (higher than elements)
+                item.setZValue(1001)
         
         # Force update
         self.view.update()
@@ -517,7 +590,7 @@ class RCViewer(QMainWindow):
     
     def clear_highlight(self):
         """Clear all highlights and restore original styles."""
-        # Restore element styles
+        # Restore element styles and Z values
         for item in self.selected_element_items:
             if item in self.item_original_pen and self.item_original_pen[item]:
                 if hasattr(item, 'setPen'):
@@ -525,8 +598,10 @@ class RCViewer(QMainWindow):
             if item in self.item_original_brush and self.item_original_brush[item]:
                 if hasattr(item, 'setBrush'):
                     item.setBrush(self.item_original_brush[item])
+            if item in self.item_original_zvalue:
+                item.setZValue(self.item_original_zvalue[item])
         
-        # Restore node styles
+        # Restore node styles and Z values
         for item in self.selected_node_items:
             if item in self.item_original_pen and self.item_original_pen[item]:
                 if hasattr(item, 'setPen'):
@@ -534,6 +609,8 @@ class RCViewer(QMainWindow):
             if item in self.item_original_brush and self.item_original_brush[item]:
                 if hasattr(item, 'setBrush'):
                     item.setBrush(self.item_original_brush[item])
+            if item in self.item_original_zvalue:
+                item.setZValue(self.item_original_zvalue[item])
         
         self.selected_element = None
         self.selected_element_items = []
