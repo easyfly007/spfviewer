@@ -2,10 +2,9 @@ from PySide6.QtWidgets import (QMainWindow, QGraphicsView, QGraphicsScene,
                                 QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsLineItem,
                                 QGraphicsItem,
                                 QDockWidget, QCheckBox, QVBoxLayout, QWidget,
-                                QToolBar, QAction)
+                                QToolBar, QApplication)
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPen, QColor, QIcon
-from PySide6.QtWidgets import QApplication
+from PySide6.QtGui import QPen, QColor, QIcon, QAction
 from .spfparser import SPFParser
 import sys
 import os
@@ -60,6 +59,9 @@ class RCViewer(QMainWindow):
         
         # Create toolbar
         self.create_toolbar()
+        
+        # Create status bar
+        self.create_status_bar()
         
         self.render_nodes()
         self.render_elements()
@@ -145,6 +147,10 @@ class RCViewer(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, self.net_dock)
         # Make sure the dock widget is visible
         self.net_dock.setVisible(True)
+    
+    def create_status_bar(self):
+        """Create a status bar to show selected resistor information."""
+        self.statusBar().showMessage("Ready")
     
     def create_toolbar(self):
         """Create a toolbar with common tools."""
@@ -538,6 +544,14 @@ class RCViewer(QMainWindow):
         print(f"[DEBUG] Selected Nodes: {node1_id}, {node2_id}")
         print(f"[DEBUG] Net: {net_name if net_name else net_id if net_id else 'Unknown'}")
         
+        # Update status bar with resistor information
+        status_text = f"Resistor: {element.id} | Type: {element.type} | Value: {element.value} | "
+        status_text += f"Nodes: {node1_id}, {node2_id} | "
+        status_text += f"Net: {net_name if net_name else net_id if net_id else 'Unknown'}"
+        if element.layer:
+            status_text += f" | Layer: {element.layer}"
+        self.statusBar().showMessage(status_text)
+        
         # Find all graphics items for this element
         for item, elem in self.item_to_element.items():
             if elem == element:
@@ -615,6 +629,9 @@ class RCViewer(QMainWindow):
         self.selected_element = None
         self.selected_element_items = []
         self.selected_node_items = []
+        
+        # Clear status bar
+        self.statusBar().showMessage("Ready")
         
         # Force update
         self.view.update()
