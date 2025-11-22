@@ -2,12 +2,99 @@ from PySide6.QtWidgets import (QMainWindow, QGraphicsView, QGraphicsScene,
                                 QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsLineItem,
                                 QGraphicsItem,
                                 QDockWidget, QCheckBox, QVBoxLayout, QWidget,
-                                QToolBar, QApplication)
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QPen, QColor, QIcon, QAction
+                                QToolBar, QApplication, QMenuBar, QMenu, QFileDialog,
+                                QColorDialog, QDialog, QLabel, QPushButton, QComboBox,
+                                QHBoxLayout, QDialogButtonBox)
+from PySide6.QtCore import Qt, QTimer, QPoint
+from PySide6.QtGui import QPen, QColor, QIcon, QAction, QFontMetrics, QMouseEvent
 from .spfparser import SPFParser
 import sys
 import os
+
+class PanGraphicsView(QGraphicsView):
+    """Custom QGraphicsView with mouse drag to pan functionality."""
+    
+    def __init__(self, scene, parent=None):
+        super().__init__(scene, parent)
+        self._panning = False
+        self._pan_start_pos = QPoint()
+        self._space_pressed = False
+    
+    def mousePressEvent(self, event):
+        """Handle mouse press events for panning."""
+        # Enable panning with middle mouse button or space + left mouse button
+        if event.button() == Qt.MiddleButton or \
+           (event.button() == Qt.LeftButton and self._space_pressed):
+            self._panning = True
+            self._pan_start_pos = event.position().toPoint()
+            button_name = "Middle" if event.button() == Qt.MiddleButton else "Left (with Space)"
+            print(f"[DRAG] Start panning with {button_name} button at view pos: ({self._pan_start_pos.x()}, {self._pan_start_pos.y()})")
+            self.setCursor(Qt.ClosedHandCursor)
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+    
+    def mouseMoveEvent(self, event):
+        """Handle mouse move events for panning."""
+        if self._panning:
+            delta = event.position().toPoint() - self._pan_start_pos
+            old_h = self.horizontalScrollBar().value()
+            old_v = self.verticalScrollBar().value()
+            self.horizontalScrollBar().setValue(old_h - delta.x())
+            self.verticalScrollBar().setValue(old_v - delta.y())
+            new_h = self.horizontalScrollBar().value()
+            new_v = self.verticalScrollBar().value()
+            print(f"[DRAG] Move: delta=({delta.x()}, {delta.y()}), "
+                  f"scroll: H({old_h}->{new_h}), V({old_v}->{new_v})")
+            self._pan_start_pos = event.position().toPoint()
+            event.accept()
+        else:
+            super().mouseMoveEvent(event)
+    
+    def mouseReleaseEvent(self, event):
+        """Handle mouse release events for panning."""
+        if self._panning:
+            final_pos = event.position().toPoint()
+            total_delta = final_pos - self._pan_start_pos
+            print(f"[DRAG] End panning at view pos: ({final_pos.x()}, {final_pos.y()}), "
+                  f"total delta: ({total_delta.x()}, {total_delta.y()})")
+            self._panning = False
+            self.setCursor(Qt.ArrowCursor)
+            event.accept()
+        else:
+            super().mouseReleaseEvent(event)
+    
+    def keyPressEvent(self, event):
+        """Handle key press events to enable space+click panning."""
+        if event.key() == Qt.Key_Space:
+            self._space_pressed = True
+            print(f"[DRAG] Space key pressed, ready for panning")
+            self.setCursor(Qt.OpenHandCursor)
+        super().keyPressEvent(event)
+    
+    def keyReleaseEvent(self, event):
+        """Handle key release events."""
+        if event.key() == Qt.Key_Space:
+            self._space_pressed = False
+            print(f"[DRAG] Space key released, panning mode disabled")
+            if not self._panning:
+                self.setCursor(Qt.ArrowCursor)
+        super().keyReleaseEvent(event)
+    
+    def contextMenuEvent(self, event):
+        """Handle right-click context menu events."""
+        # Get the parent RCViewer to create the context menu
+        parent = self.parent()
+        while parent and not isinstance(parent, QMainWindow):
+            parent = parent.parent()
+        
+        if parent and hasattr(parent, 'show_context_menu'):
+            # Convert view coordinates to scene coordinates
+            view_pos = event.pos()
+            scene_pos = self.mapToScene(view_pos)
+            parent.show_context_menu(event.globalPos(), scene_pos)
+        else:
+            super().contextMenuEvent(event)
 
 class RCViewer(QMainWindow):
     NODE_RADIUS = 1
@@ -17,8 +104,10 @@ class RCViewer(QMainWindow):
         self.file_path = file_path
         self.setWindowTitle("SPF/DSPF Viewer")
         self.setGeometry(100, 100, 800, 600)
+        # Initialize file name label for status bar
+        self.file_name_label = None
         self.scene = QGraphicsScene()
-        self.view = QGraphicsView(self.scene)
+        self.view = PanGraphicsView(self.scene)
         # no qt please, use numpy and matplotlib instead
         self.view.setBackgroundBrush(QColor(255, 255, 255))
         self.setCentralWidget(self.view)
@@ -57,6 +146,9 @@ class RCViewer(QMainWindow):
         self.create_net_panel()
         self.create_layer_panel()
         
+        # Create menu bar
+        self.create_menu_bar()
+        
         # Create toolbar
         self.create_toolbar()
         
@@ -68,6 +160,9 @@ class RCViewer(QMainWindow):
         
         # Connect scene selection changed signal
         self.scene.selectionChanged.connect(self.on_selection_changed)
+        
+        # Schedule fit to view after window is shown
+        QTimer.singleShot(100, self.fit_to_view)
     
     def collect_layers(self):
         """Collect all unique layers from nodes and elements."""
@@ -123,6 +218,110 @@ class RCViewer(QMainWindow):
         """Get the color for a given layer."""
         return self.layer_colors.get(layer, QColor(128, 128, 128))  # Default to gray if layer not found
     
+    def set_layer_color(self):
+        """Open a dialog to set color for a layer."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Set Layer Color")
+        dialog.setModal(True)
+        
+        layout = QVBoxLayout()
+        dialog.setLayout(layout)
+        
+        # Layer selection
+        layer_label = QLabel("Select Layer:")
+        layout.addWidget(layer_label)
+        
+        layer_combo = QComboBox()
+        for layer in self.all_layers:
+            layer_name = str(layer) if layer is not None else "None"
+            layer_combo.addItem(layer_name, layer)
+        layout.addWidget(layer_combo)
+        
+        # Current color display
+        color_label = QLabel("Current Color:")
+        layout.addWidget(color_label)
+        
+        color_preview = QLabel()
+        color_preview.setMinimumHeight(30)
+        color_preview.setStyleSheet(f"background-color: {self.get_layer_color(self.all_layers[0]).name()}; border: 1px solid black;")
+        layout.addWidget(color_preview)
+        
+        # Update preview when layer changes
+        def update_color_preview():
+            selected_layer = layer_combo.currentData()
+            current_color = self.get_layer_color(selected_layer)
+            color_preview.setStyleSheet(f"background-color: {current_color.name()}; border: 1px solid black;")
+        
+        layer_combo.currentIndexChanged.connect(update_color_preview)
+        update_color_preview()
+        
+        # Color picker button
+        color_button = QPushButton("Choose Color...")
+        layout.addWidget(color_button)
+        
+        selected_color = [None]  # Use list to allow modification in nested function
+        
+        def choose_color():
+            selected_layer = layer_combo.currentData()
+            current_color = self.get_layer_color(selected_layer)
+            color = QColorDialog.getColor(current_color, dialog, "Choose Layer Color")
+            if color.isValid():
+                selected_color[0] = color
+                color_preview.setStyleSheet(f"background-color: {color.name()}; border: 1px solid black;")
+        
+        color_button.clicked.connect(choose_color)
+        
+        # Dialog buttons
+        button_box = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        button_box.accepted.connect(dialog.accept)
+        button_box.rejected.connect(dialog.reject)
+        layout.addWidget(button_box)
+        
+        if dialog.exec() == QDialog.Accepted:
+            selected_layer = layer_combo.currentData()
+            if selected_color[0] is not None:
+                # Update layer color
+                self.layer_colors[selected_layer] = selected_color[0]
+                print(f"[DEBUG] Set color for layer {selected_layer}: {selected_color[0].name()}")
+                
+                # Update all graphics items with this layer
+                self.update_layer_colors(selected_layer, selected_color[0])
+                
+                # Update color preview in layer panel
+                if selected_layer in self.layer_color_labels:
+                    color_label = self.layer_color_labels[selected_layer]
+                    color_label.setStyleSheet(f"background-color: {selected_color[0].name()}; border: 1px solid black;")
+                    color_label.setToolTip(f"Layer color: {selected_color[0].name()}")
+                
+                self.statusBar().showMessage(f"Color updated for layer: {str(selected_layer) if selected_layer else 'None'}")
+            else:
+                self.statusBar().showMessage("No color selected")
+    
+    def update_layer_colors(self, layer, color):
+        """Update colors for all graphics items with the specified layer."""
+        if layer in self.layer_items:
+            for item in self.layer_items[layer]:
+                # Skip if item is currently highlighted
+                if item in self.selected_element_items or item in self.selected_node_items:
+                    continue
+                
+                # Update node colors (ellipses)
+                if isinstance(item, QGraphicsEllipseItem):
+                    item.setBrush(color)
+                
+                # Update element colors (rectangles and lines)
+                elif isinstance(item, QGraphicsRectItem):
+                    pen_color = color.darker(120)
+                    item.setPen(QPen(pen_color))
+                    item.setBrush(color.lighter(150))
+                elif hasattr(item, 'setPen'):  # For lines
+                    pen_color = color.darker(120)
+                    item.setPen(QPen(pen_color, 1))
+        
+        # Force view update
+        self.view.update()
+        self.scene.update()
+    
     def create_net_panel(self):
         """Create a dock widget with net selection checkboxes."""
         self.net_dock = QDockWidget("Net Selection", self)
@@ -149,8 +348,143 @@ class RCViewer(QMainWindow):
         self.net_dock.setVisible(True)
     
     def create_status_bar(self):
-        """Create a status bar to show selected resistor information."""
-        self.statusBar().showMessage("Ready")
+        """Create a status bar to show selected resistor information and file name."""
+        status_bar = self.statusBar()
+        status_bar.showMessage("Ready")
+        
+        # Add permanent widget to show file name (second line effect)
+        self.file_name_label = QLabel("")
+        self.file_name_label.setAlignment(Qt.AlignRight)
+        self.file_name_label.setMinimumWidth(200)  # Ensure it has space
+        status_bar.addPermanentWidget(self.file_name_label)
+        
+        # Update file name if file_path is provided
+        if self.file_path:
+            file_name = os.path.basename(self.file_path)
+            self.update_file_name_display(file_name)
+            print(f"[DEBUG] Status bar: Setting file name to {file_name}")
+        else:
+            print("[DEBUG] Status bar: No file path provided")
+        
+        # Force status bar to update
+        status_bar.update()
+    
+    def update_file_name_display(self, file_name):
+        """Update the file name display in status bar."""
+        if self.file_name_label:
+            if file_name:
+                self.file_name_label.setText(f"File: {file_name}")
+                self.file_name_label.setVisible(True)
+                print(f"[DEBUG] Status bar: Updated file name label to 'File: {file_name}'")
+            else:
+                self.file_name_label.setText("")
+                self.file_name_label.setVisible(False)
+                print("[DEBUG] Status bar: Cleared file name label")
+        else:
+            print("[DEBUG] Status bar: file_name_label is None")
+    
+    def create_menu_bar(self):
+        """Create a menu bar with file menu."""
+        menubar = self.menuBar()
+        
+        # File menu
+        file_menu = menubar.addMenu("File")
+        
+        # Open SPF file action
+        open_action = QAction("Open SPF File...", self)
+        open_action.setShortcut("Ctrl+O")
+        open_action.triggered.connect(self.open_spf_file)
+        file_menu.addAction(open_action)
+        
+        # Separator
+        file_menu.addSeparator()
+        
+        # Exit action
+        exit_action = QAction("Exit", self)
+        exit_action.setShortcut("Ctrl+Q")
+        exit_action.triggered.connect(self.close)
+        file_menu.addAction(exit_action)
+        
+        # Preferences menu
+        preferences_menu = menubar.addMenu("Preferences")
+        
+        # Set layer color action
+        set_color_action = QAction("Set Layer Color...", self)
+        set_color_action.triggered.connect(self.set_layer_color)
+        preferences_menu.addAction(set_color_action)
+    
+    def open_spf_file(self):
+        """Open a SPF file dialog and load the selected file."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open SPF File",
+            "",
+            "SPF Files (*.spf *.dspf);;All Files (*)"
+        )
+        
+        if file_path:
+            try:
+                # Clear current scene
+                self.scene.clear()
+                
+                # Reset all tracking dictionaries
+                self.layer_items = {}
+                self.net_items = {}
+                self.item_to_net = {}
+                self.item_to_layer = {}
+                self.item_to_element = {}
+                self.item_to_node = {}
+                self.node_to_elements = {}
+                self.element_graphics_items = {}
+                self.item_original_pen = {}
+                self.item_original_brush = {}
+                self.item_original_zvalue = {}
+                self.selected_element = None
+                self.selected_element_items = []
+                self.selected_node_items = []
+                
+                # Update file path and parse new file
+                self.file_path = file_path
+                self.parser = SPFParser(file_path)
+                
+                # Update window title (first line)
+                self.setWindowTitle("SPF/DSPF Viewer")
+                
+                # Update file name display in status bar (second line)
+                self.update_file_name_display(os.path.basename(file_path))
+                
+                # Recollect layers and nets
+                self.collect_layers()
+                self.collect_nets()
+                
+                # Reinitialize layer colors
+                self.init_layer_colors()
+                
+                # Recreate panels
+                if hasattr(self, 'net_dock'):
+                    self.removeDockWidget(self.net_dock)
+                if hasattr(self, 'layer_dock'):
+                    self.removeDockWidget(self.layer_dock)
+                self.create_net_panel()
+                self.create_layer_panel()
+                
+                # Re-render
+                self.render_nodes()
+                self.render_elements()
+                
+                # Fit to view after loading
+                QTimer.singleShot(100, self.fit_to_view)
+                
+                # Update status bar
+                self.statusBar().showMessage(f"Loaded: {os.path.basename(file_path)}")
+                
+                print(f"[DEBUG] Opened SPF file: {file_path}")
+                
+            except Exception as e:
+                self.statusBar().showMessage(f"Error loading file: {str(e)}")
+                print(f"[DEBUG] Error loading file: {e}")
+                import traceback
+                traceback.print_exc()
     
     def create_toolbar(self):
         """Create a toolbar with common tools."""
@@ -199,9 +533,20 @@ class RCViewer(QMainWindow):
         self.view.scale(1.0 / 1.2, 1.0 / 1.2)
     
     def fit_to_view(self):
-        """Fit all items to the view."""
+        """Fit all items to the view with 5% margin on left and right sides."""
         if self.scene.items():
-            self.view.fitInView(self.scene.itemsBoundingRect(), Qt.KeepAspectRatio)
+            bounding_rect = self.scene.itemsBoundingRect()
+            if not bounding_rect.isEmpty():
+                # Calculate 5% margin on both left and right sides
+                margin_ratio = 0.05  # 5% margin
+                width = bounding_rect.width()
+                height = bounding_rect.height()
+                
+                # Expand the bounding rect by 5% on each side (total 10% width increase)
+                margin_width = width * margin_ratio
+                expanded_rect = bounding_rect.adjusted(-margin_width, 0, margin_width, 0)
+                
+                self.view.fitInView(expanded_rect, Qt.KeepAspectRatio)
     
     def reset_zoom(self):
         """Reset zoom to 1:1."""
@@ -213,7 +558,7 @@ class RCViewer(QMainWindow):
         self.clear_highlight()
     
     def create_layer_panel(self):
-        """Create a dock widget with layer selection checkboxes."""
+        """Create a dock widget with layer selection checkboxes and color previews."""
         self.layer_dock = QDockWidget("Layer Selection", self)
         self.layer_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
         
@@ -221,16 +566,58 @@ class RCViewer(QMainWindow):
         layout = QVBoxLayout()
         widget.setLayout(layout)
         
-        # Create checkboxes for each layer
+        # Create checkboxes for each layer with color preview
         self.layer_checkboxes = {}
+        self.layer_color_labels = {}  # Store color preview labels
+        
+        # Find the maximum checkbox width to align color blocks
+        # Calculate maximum width needed using font metrics
+        font_metrics = QFontMetrics(self.font())
+        max_checkbox_width = 0
         for layer in self.all_layers:
             layer_name = str(layer) if layer is not None else "None"
+            # Approximate width: checkbox + text + some padding
+            text_width = font_metrics.horizontalAdvance(layer_name)
+            checkbox_width = 20  # Approximate checkbox width
+            total_width = checkbox_width + text_width + 10  # 10px padding
+            max_checkbox_width = max(max_checkbox_width, total_width)
+        
+        for layer in self.all_layers:
+            layer_name = str(layer) if layer is not None else "None"
+            
+            # Create a horizontal layout for checkbox and color preview
+            layer_widget = QWidget()
+            layer_layout = QHBoxLayout()
+            layer_widget.setLayout(layer_layout)
+            layer_layout.setContentsMargins(0, 0, 0, 0)
+            layer_layout.setSpacing(5)
+            
             checkbox = QCheckBox(layer_name)
             checkbox.setChecked(True)  # All layers visible by default
             # Use a lambda that captures the checkbox object to get the actual state
             checkbox.stateChanged.connect(lambda checked, l=layer, cb=checkbox: self.on_layer_toggled(l, cb.isChecked()))
             self.layer_checkboxes[layer] = checkbox
-            layout.addWidget(checkbox)
+            layer_layout.addWidget(checkbox)
+            
+            # Add a fixed-width spacer to push color blocks to the same position
+            # This ensures all color blocks align vertically
+            spacer_width = max_checkbox_width - font_metrics.horizontalAdvance(layer_name) - 20 - 5
+            if spacer_width > 0:
+                spacer = QWidget()
+                spacer.setFixedWidth(spacer_width)
+                layer_layout.addWidget(spacer)
+            
+            # Add color preview label - all will be at the same horizontal position
+            color_label = QLabel()
+            color_label.setFixedSize(20, 20)
+            layer_color = self.get_layer_color(layer)
+            color_label.setStyleSheet(f"background-color: {layer_color.name()}; border: 1px solid black;")
+            color_label.setToolTip(f"Layer color: {layer_color.name()}")
+            self.layer_color_labels[layer] = color_label
+            layer_layout.addWidget(color_label)
+            
+            layer_layout.addStretch()
+            layout.addWidget(layer_widget)
         
         layout.addStretch()
         self.layer_dock.setWidget(widget)
@@ -643,6 +1030,92 @@ class RCViewer(QMainWindow):
             self.view.scale(zoom_factor, zoom_factor) 
         else: 
             self.view.scale(1 / zoom_factor, 1 / zoom_factor)
+    
+    def show_context_menu(self, global_pos, scene_pos):
+        """Show context menu at the right-click position."""
+        menu = QMenu(self)
+        
+        # Find item at the clicked position
+        item_at_pos = self.scene.itemAt(scene_pos, self.view.transform())
+        
+        if item_at_pos:
+            # Menu for items (resistors or nodes)
+            if item_at_pos in self.item_to_element:
+                # Right-clicked on a resistor
+                element = self.item_to_element[item_at_pos]
+                menu.addAction(f"Resistor: {element.id}", lambda: self._select_element(element))
+                menu.addSeparator()
+                # Find net for this element using item_to_net mapping
+                net_id = self.item_to_net.get(item_at_pos)
+                if net_id:
+                    menu.addAction(f"Net: {net_id}", lambda: self._select_net(net_id))
+                if element.layer:
+                    menu.addAction(f"Layer: {element.layer}", lambda: self._select_layer(element.layer))
+            elif item_at_pos in self.item_to_node:
+                # Right-clicked on a node
+                node = self.item_to_node[item_at_pos]
+                menu.addAction(f"Node: {node.id}", lambda: self._select_node(node))
+                menu.addSeparator()
+                if node.layer:
+                    menu.addAction(f"Layer: {node.layer}", lambda: self._select_layer(node.layer))
+                # Find net for this node
+                net_id = self.item_to_net.get(item_at_pos)
+                if net_id:
+                    menu.addAction(f"Net: {net_id}", lambda: self._select_net(net_id))
+            
+            menu.addSeparator()
+        
+        # Common menu items
+        menu.addAction("Zoom In", self.zoom_in)
+        menu.addAction("Zoom Out", self.zoom_out)
+        menu.addAction("Fit to View", self.fit_to_view)
+        menu.addAction("Reset Zoom", self.reset_zoom)
+        menu.addSeparator()
+        menu.addAction("Clear Selection", self.clear_selection)
+        
+        # Show menu
+        menu.exec(global_pos)
+    
+    def _select_element(self, element):
+        """Select and highlight an element."""
+        # Clear current selection
+        self.scene.clearSelection()
+        # Find and select the graphics items for this element
+        if element in self.element_graphics_items:
+            for item in self.element_graphics_items[element]:
+                item.setSelected(True)
+        self.on_selection_changed()
+    
+    def _select_node(self, node):
+        """Select and highlight a node."""
+        # Clear current selection
+        self.scene.clearSelection()
+        # Find and select the graphics item for this node
+        for item, n in self.item_to_node.items():
+            if n == node:
+                item.setSelected(True)
+                break
+        self.on_selection_changed()
+    
+    def _select_net(self, net_id):
+        """Select all items in a net."""
+        # Clear current selection
+        self.scene.clearSelection()
+        # Select all items in this net
+        if net_id in self.net_items:
+            for item in self.net_items[net_id]:
+                item.setSelected(True)
+        self.on_selection_changed()
+    
+    def _select_layer(self, layer):
+        """Select all items in a layer."""
+        # Clear current selection
+        self.scene.clearSelection()
+        # Select all items in this layer
+        if layer in self.layer_items:
+            for item in self.layer_items[layer]:
+                item.setSelected(True)
+        self.on_selection_changed()
 
     def show(self):
         #self.render_nodes()
