@@ -5,12 +5,51 @@ from PySide6.QtWidgets import (QMainWindow, QGraphicsView, QGraphicsScene,
                                 QToolBar, QApplication, QMenuBar, QMenu, QFileDialog,
                                 QColorDialog, QDialog, QLabel, QPushButton, QComboBox,
                                 QHBoxLayout, QDialogButtonBox)
-from PySide6.QtCore import Qt, QTimer, QPoint
+from PySide6.QtCore import Qt, QTimer, QPoint, QEvent
 from PySide6.QtGui import QPen, QColor, QIcon, QAction, QFontMetrics, QMouseEvent
 from .spfparser import SPFParser
 import sys
 import os
 import time
+
+class ThumbnailView(QGraphicsView):
+    """Custom QGraphicsView for thumbnail that always fits in view and disables all interactions."""
+    
+    def __init__(self, scene, parent=None):
+        super().__init__(scene, parent)
+        self._always_fit = True
+    
+    def wheelEvent(self, event):
+        """Disable wheel zoom in thumbnail."""
+        event.ignore()
+    
+    def mousePressEvent(self, event):
+        """Disable mouse interactions in thumbnail."""
+        event.ignore()
+    
+    def mouseMoveEvent(self, event):
+        """Disable mouse move in thumbnail."""
+        event.ignore()
+    
+    def mouseReleaseEvent(self, event):
+        """Disable mouse release in thumbnail."""
+        event.ignore()
+    
+    def resizeEvent(self, event):
+        """Automatically fit in view when resized."""
+        super().resizeEvent(event)
+        if self._always_fit and self.scene() and self.scene().items():
+            bounding_rect = self.scene().itemsBoundingRect()
+            if not bounding_rect.isEmpty():
+                self.fitInView(bounding_rect, Qt.KeepAspectRatio)
+    
+    def setAlwaysFit(self, always_fit):
+        """Set whether to always fit in view."""
+        self._always_fit = always_fit
+        if always_fit and self.scene() and self.scene().items():
+            bounding_rect = self.scene().itemsBoundingRect()
+            if not bounding_rect.isEmpty():
+                self.fitInView(bounding_rect, Qt.KeepAspectRatio)
 
 class PanGraphicsView(QGraphicsView):
     """Custom QGraphicsView with mouse drag to pan functionality."""
@@ -69,7 +108,6 @@ class PanGraphicsView(QGraphicsView):
         """Handle key press events to enable space+click panning."""
         if event.key() == Qt.Key_Space:
             self._space_pressed = True
-            print(f"[DRAG] Space key pressed, ready for panning")
             self.setCursor(Qt.OpenHandCursor)
         super().keyPressEvent(event)
     
@@ -77,7 +115,6 @@ class PanGraphicsView(QGraphicsView):
         """Handle key release events."""
         if event.key() == Qt.Key_Space:
             self._space_pressed = False
-            print(f"[DRAG] Space key released, panning mode disabled")
             if not self._panning:
                 self.setCursor(Qt.ArrowCursor)
         super().keyReleaseEvent(event)
@@ -98,7 +135,7 @@ class PanGraphicsView(QGraphicsView):
             super().contextMenuEvent(event)
 
 class RCViewer(QMainWindow):
-    NODE_RADIUS = 1
+    NODE_RADIUS = 0.5
     
     def __init__(self, file_path):
         super().__init__()
@@ -108,6 +145,10 @@ class RCViewer(QMainWindow):
         # Initialize file name label for status bar
         self.file_name_label = None
         self.scene = QGraphicsScene()
+        # Thumbnail scene and view
+        self.thumbnail_scene = None
+        self.thumbnail_view = None
+        self.viewport_rect = None
         self.view = PanGraphicsView(self.scene)
         # no qt please, use numpy and matplotlib instead
         self.view.setBackgroundBrush(QColor(255, 255, 255))
@@ -118,12 +159,46 @@ class RCViewer(QMainWindow):
         print("Starting to load and render SPF file...")
         print("=" * 60)
         
+        # Debug: File information
+        print(f"[DEBUG] SPF file path: {self.file_path}")
+        if os.path.exists(self.file_path):
+            file_size = os.path.getsize(self.file_path)
+            print(f"[DEBUG] File exists, size: {file_size:,} bytes ({file_size / 1024:.2f} KB)")
+        else:
+            print(f"[DEBUG] WARNING: File does not exist!")
+        
         # Parse SPF file
+        print(f"[DEBUG] Starting to parse SPF file...")
         parse_start = time.time()
         self.parser = SPFParser(self.file_path)
         parse_end = time.time()
         parse_time = parse_end - parse_start
         print(f"[Time Stats] Parse SPF file: {parse_time:.4f} seconds")
+        
+        # Debug: Parse results
+        total_nets = len(self.parser.nets)
+        total_nodes = sum(len(net.get_nodes()) for net in self.parser.nets.values())
+        total_elements = sum(len(net.get_elements()) for net in self.parser.nets.values())
+        print(f"[DEBUG] Parsed results:")
+        print(f"  - Total nets: {total_nets}")
+        print(f"  - Total nodes: {total_nodes}")
+        print(f"  - Total elements: {total_elements}")
+        
+        # Debug: Count by element type
+        element_types = {}
+        for net in self.parser.nets.values():
+            for elem in net.get_elements():
+                elem_type = elem.type if hasattr(elem, 'type') else 'Unknown'
+                element_types[elem_type] = element_types.get(elem_type, 0) + 1
+        if element_types:
+            print(f"[DEBUG] Element types breakdown:")
+            for elem_type, count in sorted(element_types.items()):
+                print(f"  - {elem_type}: {count}")
+        
+        # Debug: Sample net IDs
+        if total_nets > 0:
+            sample_nets = list(self.parser.nets.keys())[:5]
+            print(f"[DEBUG] Sample net IDs (first 5): {sample_nets}")
         
         # Store graphics items by layer for visibility control
         self.layer_items = {}  # {layer_name: [list of graphics items]}
@@ -150,8 +225,11 @@ class RCViewer(QMainWindow):
         self.selected_node_items = []  # Graphics items for selected nodes
         
         # Collect all layers and nets, then create selection panels
+        print(f"[DEBUG] Collecting layers and nets...")
         self.collect_layers()
         self.collect_nets()
+        print(f"[DEBUG] Collected {len(self.all_layers)} layers, {len(self.all_nets)} nets")
+        print(f"[DEBUG] Layers: {[str(l) if l is not None else 'None' for l in self.all_layers]}")
         # Initialize layer color mapping
         self.init_layer_colors()
         # Create net panel first so it appears above layer panel
@@ -168,6 +246,7 @@ class RCViewer(QMainWindow):
         self.create_status_bar()
         
         # Render graphics
+        print(f"[DEBUG] Starting to render graphics...")
         render_start = time.time()
         self.render_nodes()
         render_nodes_time = time.time() - render_start
@@ -177,6 +256,20 @@ class RCViewer(QMainWindow):
         self.render_elements()
         render_elements_time = time.time() - render_elements_start
         print(f"[Time Stats] Render elements: {render_elements_time:.4f} seconds")
+        
+        # Debug: Render results
+        total_graphics_items = len(self.scene.items())
+        print(f"[DEBUG] Total graphics items in scene: {total_graphics_items}")
+        print(f"[DEBUG] Graphics items by type:")
+        ellipse_count = sum(1 for item in self.scene.items() if isinstance(item, QGraphicsEllipseItem))
+        rect_count = sum(1 for item in self.scene.items() if isinstance(item, QGraphicsRectItem))
+        line_count = sum(1 for item in self.scene.items() if isinstance(item, QGraphicsLineItem))
+        print(f"  - Ellipses (nodes): {ellipse_count}")
+        print(f"  - Rectangles: {rect_count}")
+        print(f"  - Lines: {line_count}")
+        
+        # Update thumbnail after rendering
+        QTimer.singleShot(200, self.update_thumbnail)
         
         total_render_time = render_nodes_time + render_elements_time
         total_time = parse_time + total_render_time
@@ -477,6 +570,16 @@ class RCViewer(QMainWindow):
                 # Clear current scene
                 self.scene.clear()
                 
+                # Clear thumbnail scene if it exists
+                if hasattr(self, 'thumbnail_scene') and self.thumbnail_scene:
+                    # Clear all items except viewport rect
+                    items_to_remove = []
+                    for item in self.thumbnail_scene.items():
+                        if item != self.viewport_rect:
+                            items_to_remove.append(item)
+                    for item in items_to_remove:
+                        self.thumbnail_scene.removeItem(item)
+                
                 # Reset all tracking dictionaries
                 self.layer_items = {}
                 self.net_items = {}
@@ -498,12 +601,46 @@ class RCViewer(QMainWindow):
                 print(f"Starting to load new SPF file: {os.path.basename(file_path)}")
                 print("=" * 60)
                 
+                # Debug: File information
+                print(f"[DEBUG] SPF file path: {file_path}")
+                if os.path.exists(file_path):
+                    file_size = os.path.getsize(file_path)
+                    print(f"[DEBUG] File exists, size: {file_size:,} bytes ({file_size / 1024:.2f} KB)")
+                else:
+                    print(f"[DEBUG] WARNING: File does not exist!")
+                
                 # Update file path and parse new file
                 self.file_path = file_path
+                print(f"[DEBUG] Starting to parse SPF file...")
                 parse_start = time.time()
                 self.parser = SPFParser(file_path)
                 parse_time = time.time() - parse_start
                 print(f"[Time Stats] Parse SPF file: {parse_time:.4f} seconds")
+                
+                # Debug: Parse results
+                total_nets = len(self.parser.nets)
+                total_nodes = sum(len(net.get_nodes()) for net in self.parser.nets.values())
+                total_elements = sum(len(net.get_elements()) for net in self.parser.nets.values())
+                print(f"[DEBUG] Parsed results:")
+                print(f"  - Total nets: {total_nets}")
+                print(f"  - Total nodes: {total_nodes}")
+                print(f"  - Total elements: {total_elements}")
+                
+                # Debug: Count by element type
+                element_types = {}
+                for net in self.parser.nets.values():
+                    for elem in net.get_elements():
+                        elem_type = elem.type if hasattr(elem, 'type') else 'Unknown'
+                        element_types[elem_type] = element_types.get(elem_type, 0) + 1
+                if element_types:
+                    print(f"[DEBUG] Element types breakdown:")
+                    for elem_type, count in sorted(element_types.items()):
+                        print(f"  - {elem_type}: {count}")
+                
+                # Debug: Sample net IDs
+                if total_nets > 0:
+                    sample_nets = list(self.parser.nets.keys())[:5]
+                    print(f"[DEBUG] Sample net IDs (first 5): {sample_nets}")
                 
                 # Update window title (first line)
                 self.setWindowTitle("SPF/DSPF Viewer")
@@ -511,13 +648,13 @@ class RCViewer(QMainWindow):
                 # Update file name display in status bar (second line)
                 self.update_file_name_display(os.path.basename(file_path))
                 
-                # Update top status bar
-                self.update_top_status_bar(os.path.basename(file_path))
-                
                 # Recollect layers and nets
+                print(f"[DEBUG] Collecting layers and nets...")
                 collect_start = time.time()
                 self.collect_layers()
                 self.collect_nets()
+                print(f"[DEBUG] Collected {len(self.all_layers)} layers, {len(self.all_nets)} nets")
+                print(f"[DEBUG] Layers: {[str(l) if l is not None else 'None' for l in self.all_layers]}")
                 
                 # Reinitialize layer colors
                 self.init_layer_colors()
@@ -530,12 +667,16 @@ class RCViewer(QMainWindow):
                     self.removeDockWidget(self.net_dock)
                 if hasattr(self, 'layer_dock'):
                     self.removeDockWidget(self.layer_dock)
+                if hasattr(self, 'thumbnail_dock'):
+                    self.removeDockWidget(self.thumbnail_dock)
                 self.create_net_panel()
                 self.create_layer_panel()
+                self.create_thumbnail_panel()
                 panel_time = time.time() - panel_start
                 print(f"[Time Stats] Create panels: {panel_time:.4f} seconds")
                 
                 # Re-render
+                print(f"[DEBUG] Starting to render graphics...")
                 render_start = time.time()
                 self.render_nodes()
                 render_nodes_time = time.time() - render_start
@@ -545,6 +686,20 @@ class RCViewer(QMainWindow):
                 self.render_elements()
                 render_elements_time = time.time() - render_elements_start
                 print(f"[Time Stats] Render elements: {render_elements_time:.4f} seconds")
+                
+                # Debug: Render results
+                total_graphics_items = len(self.scene.items())
+                print(f"[DEBUG] Total graphics items in scene: {total_graphics_items}")
+                print(f"[DEBUG] Graphics items by type:")
+                ellipse_count = sum(1 for item in self.scene.items() if isinstance(item, QGraphicsEllipseItem))
+                rect_count = sum(1 for item in self.scene.items() if isinstance(item, QGraphicsRectItem))
+                line_count = sum(1 for item in self.scene.items() if isinstance(item, QGraphicsLineItem))
+                print(f"  - Ellipses (nodes): {ellipse_count}")
+                print(f"  - Rectangles: {rect_count}")
+                print(f"  - Lines: {line_count}")
+                
+                # Update thumbnail after rendering new file
+                QTimer.singleShot(200, self.update_thumbnail)
                 
                 total_render_time = render_nodes_time + render_elements_time
                 total_time = parse_time + collect_time + panel_time + total_render_time
@@ -607,10 +762,12 @@ class RCViewer(QMainWindow):
     def zoom_in(self):
         """Zoom in the view."""
         self.view.scale(1.2, 1.2)
+        self.update_viewport_rect()
     
     def zoom_out(self):
         """Zoom out the view."""
         self.view.scale(1.0 / 1.2, 1.0 / 1.2)
+        self.update_viewport_rect()
     
     def fit_to_view(self):
         """Fit all items to the view with 5% margin on left and right sides."""
@@ -627,10 +784,12 @@ class RCViewer(QMainWindow):
                 expanded_rect = bounding_rect.adjusted(-margin_width, 0, margin_width, 0)
                 
                 self.view.fitInView(expanded_rect, Qt.KeepAspectRatio)
+                QTimer.singleShot(50, self.update_viewport_rect)
     
     def reset_zoom(self):
         """Reset zoom to 1:1."""
         self.view.resetTransform()
+        self.update_viewport_rect()
     
     def clear_selection(self):
         """Clear current selection and highlights."""
@@ -706,6 +865,147 @@ class RCViewer(QMainWindow):
         self.splitDockWidget(self.net_dock, self.layer_dock, Qt.Vertical)
         # Make sure the dock widget is visible
         self.layer_dock.setVisible(True)
+        
+        # Create thumbnail overview panel below layer panel
+        self.create_thumbnail_panel()
+    
+    def create_thumbnail_panel(self):
+        """Create a thumbnail overview panel showing the entire res map."""
+        self.thumbnail_dock = QDockWidget("Overview", self)
+        self.thumbnail_dock.setAllowedAreas(Qt.LeftDockWidgetArea | Qt.RightDockWidgetArea)
+        
+        # Create a scene for thumbnail
+        self.thumbnail_scene = QGraphicsScene()
+        self.thumbnail_view = ThumbnailView(self.thumbnail_scene)
+        # Use the same background color as main view (white)
+        self.thumbnail_view.setBackgroundBrush(QColor(255, 255, 255))
+        self.thumbnail_view.setMinimumSize(200, 200)
+        self.thumbnail_view.setMaximumSize(300, 300)
+        self.thumbnail_view.setDragMode(QGraphicsView.NoDrag)  # Disable dragging in thumbnail
+        self.thumbnail_view.setInteractive(False)  # Disable interaction
+        self.thumbnail_view.setAlwaysFit(True)  # Always fit in view, no zoom/pan allowed
+        
+        # Add viewport rectangle to show current view area
+        self.viewport_rect = QGraphicsRectItem()
+        self.viewport_rect.setPen(QPen(QColor(255, 0, 0), 2))  # Red rectangle
+        self.viewport_rect.setBrush(QColor(255, 0, 0, 50))  # Semi-transparent red
+        self.viewport_rect.setZValue(10000)  # Always on top
+        self.thumbnail_scene.addItem(self.viewport_rect)
+        
+        # Connect main view changes to update thumbnail
+        self.view.viewport().installEventFilter(self)
+        
+        # Set widget
+        self.thumbnail_dock.setWidget(self.thumbnail_view)
+        self.addDockWidget(Qt.RightDockWidgetArea, self.thumbnail_dock)
+        
+        # Split dock widgets so thumbnail is below layer panel
+        self.splitDockWidget(self.layer_dock, self.thumbnail_dock, Qt.Vertical)
+        self.thumbnail_dock.setVisible(True)
+        
+        # Update thumbnail after rendering
+        QTimer.singleShot(200, self.update_thumbnail)
+    
+    def update_thumbnail(self):
+        """Update the thumbnail view to show all items and current viewport."""
+        if not hasattr(self, 'thumbnail_scene') or not self.thumbnail_scene:
+            return
+        
+        # Clear thumbnail scene (except viewport rect)
+        items_to_remove = []
+        for item in self.thumbnail_scene.items():
+            if item != self.viewport_rect:
+                items_to_remove.append(item)
+        for item in items_to_remove:
+            self.thumbnail_scene.removeItem(item)
+        
+        # Copy all visible items from main scene to thumbnail scene
+        # Ensure exact same colors and styles as main view
+        for item in self.scene.items():
+            if isinstance(item, (QGraphicsEllipseItem, QGraphicsRectItem, QGraphicsLineItem)):
+                # Create a copy for thumbnail with exact same appearance
+                if isinstance(item, QGraphicsEllipseItem):
+                    copy = QGraphicsEllipseItem(item.rect())
+                    # Copy all style properties exactly
+                    copy.setBrush(item.brush())
+                    copy.setPen(item.pen())
+                    copy.setOpacity(item.opacity())
+                    copy.setToolTip(item.toolTip())
+                elif isinstance(item, QGraphicsRectItem):
+                    copy = QGraphicsRectItem(item.rect())
+                    # Copy all style properties exactly
+                    copy.setBrush(item.brush())
+                    copy.setPen(item.pen())
+                    copy.setOpacity(item.opacity())
+                    copy.setToolTip(item.toolTip())
+                elif isinstance(item, QGraphicsLineItem):
+                    line = item.line()
+                    copy = QGraphicsLineItem(line)
+                    # Copy all style properties exactly
+                    copy.setPen(item.pen())
+                    copy.setOpacity(item.opacity())
+                    copy.setToolTip(item.toolTip())
+                
+                # Copy Z-value to maintain drawing order
+                copy.setZValue(item.zValue())
+                # Copy visibility state
+                copy.setVisible(item.isVisible())
+                self.thumbnail_scene.addItem(copy)
+        
+        # Always fit all items in thumbnail view (no zoom/pan allowed)
+        if self.thumbnail_scene.items():
+            bounding_rect = self.thumbnail_scene.itemsBoundingRect()
+            if not bounding_rect.isEmpty():
+                # Always fit in view with a small margin
+                margin = 5
+                expanded_rect = bounding_rect.adjusted(-margin, -margin, margin, margin)
+                self.thumbnail_view.fitInView(expanded_rect, Qt.KeepAspectRatio)
+                # Update viewport rect after fitting
+                QTimer.singleShot(50, self.update_viewport_rect)
+    
+    def update_viewport_rect(self):
+        """Update the viewport rectangle in thumbnail to show current view area."""
+        if not hasattr(self, 'viewport_rect') or not self.viewport_rect:
+            return
+        if not self.scene.items():
+            return
+        
+        # Get the visible area in scene coordinates
+        visible_rect = self.view.mapToScene(self.view.viewport().rect()).boundingRect()
+        
+        # Get the bounding rect of all items
+        scene_rect = self.scene.itemsBoundingRect()
+        if scene_rect.isEmpty():
+            return
+        
+        # Calculate scale factor from scene to thumbnail
+        thumbnail_rect = self.thumbnail_scene.itemsBoundingRect()
+        if thumbnail_rect.isEmpty():
+            return
+        
+        scale_x = thumbnail_rect.width() / scene_rect.width() if scene_rect.width() > 0 else 1
+        scale_y = thumbnail_rect.height() / scene_rect.height() if scene_rect.height() > 0 else 1
+        
+        # Transform visible rect to thumbnail coordinates
+        offset_x = visible_rect.x() - scene_rect.x()
+        offset_y = visible_rect.y() - scene_rect.y()
+        
+        thumbnail_x = thumbnail_rect.x() + offset_x * scale_x
+        thumbnail_y = thumbnail_rect.y() + offset_y * scale_y
+        thumbnail_width = visible_rect.width() * scale_x
+        thumbnail_height = visible_rect.height() * scale_y
+        
+        # Update viewport rectangle
+        self.viewport_rect.setRect(thumbnail_x, thumbnail_y, thumbnail_width, thumbnail_height)
+        self.thumbnail_scene.update()
+    
+    def eventFilter(self, obj, event):
+        """Event filter to catch viewport changes and update thumbnail."""
+        if obj == self.view.viewport():
+            if event.type() in (QEvent.Resize, QEvent.Paint):
+                # Update viewport rect when view changes
+                QTimer.singleShot(10, self.update_viewport_rect)
+        return super().eventFilter(obj, event)
     
     def on_layer_toggled(self, layer, is_checked):
         """Handle layer visibility toggle."""
@@ -1080,6 +1380,8 @@ class RCViewer(QMainWindow):
         # Force update
         self.view.update()
         self.scene.update()
+        # Update thumbnail to show selection
+        self.update_thumbnail()
     
     def clear_highlight(self):
         """Clear all highlights and restore original styles."""
@@ -1115,6 +1417,8 @@ class RCViewer(QMainWindow):
         # Force update
         self.view.update()
         self.scene.update()
+        # Update thumbnail
+        self.update_thumbnail()
     
     def wheelEvent(self, event):
         zoom_factor = 1.15 
@@ -1122,6 +1426,8 @@ class RCViewer(QMainWindow):
             self.view.scale(zoom_factor, zoom_factor) 
         else: 
             self.view.scale(1 / zoom_factor, 1 / zoom_factor)
+        self.update_viewport_rect()
+        self.update_viewport_rect()
     
     def show_context_menu(self, global_pos, scene_pos):
         """Show context menu at the right-click position."""
